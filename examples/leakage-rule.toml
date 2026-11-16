@@ -1,0 +1,26 @@
+# The configuration used for the owner-rule test on a forecasting repository.
+# Enter the rule once before running:
+#   repo-audit --config examples/leakage-rule.toml rule "No code path may read evaluation-period data before final scoring. Any design choice (hyperparameters and their search spaces, model variants, model selection, feature screening, scaling, imputation) may use only the tuning period's internal validation split."
+[repo]
+path = "/path/to/forecasting-repo"
+
+[output]
+dir = "/path/to/results/forecasting-repo"
+
+[llm]
+provider = "queue"
+
+[models]
+cheap = "haiku"
+strong = "sonnet"
+verifier = "opus"
+
+[limits]
+probe_rounds = 1
+
+[verify]
+local_risk_min_severity = "high"
+skip_low_redundant = true
+# findings mentioning these are verified whatever their severity
+focus_terms = ["leak", "look-ahead", "evaluation period", "evaluation sample", "evaluation rmse",
+               "eval_rmse", "evaluation-period", "full sample", "full-sample", "whole-sample"]

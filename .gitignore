@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.repo-audit/
+repo-audit.toml
+results/
+*.db

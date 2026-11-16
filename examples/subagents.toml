@@ -1,0 +1,22 @@
+# Run with Claude Code subagents as the models (see harness/subagents/step.py).
+[repo]
+path = "/path/to/target-repo"
+
+[output]
+dir = "/path/to/results/target-repo"
+
+[llm]
+provider = "queue"
+
+[models]
+cheap = "haiku"
+strong = "sonnet"
+verifier = "opus"
+
+[limits]
+probe_rounds = 1
+
+[verify]
+local_risk_min_severity = "medium"
+rule_min_severity = "medium"
+skip_low_redundant = true
