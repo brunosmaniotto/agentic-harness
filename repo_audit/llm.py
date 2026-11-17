@@ -75,7 +75,7 @@ class LLM:
         if llm["provider"] == "openai_compatible":
             if not os.environ.get(llm["api_key_env"], ""):
                 raise LLMError(f"environment variable {llm['api_key_env']} is not set")
-            for tier in sorted(set(self.cfg["stages"].values())):
+            for tier in sorted(set(self.cfg["stages"].values()) - {"verifier_2"}):  # optional
                 if not self.cfg["models"].get(tier):
                     raise LLMError(f"[models].{tier} is empty in the config")
         elif llm["provider"] == "command" and not llm["command"]:

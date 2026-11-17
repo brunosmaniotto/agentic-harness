@@ -68,6 +68,14 @@ A rule is a demand with no file behind it. Rules written in the documentation ar
 
 Each file is read for two things besides what it does: what it **requires** to be true of its inputs ("totals arrive already winsorized") and what it **ensures** about its outputs ("drops rows with missing dates"). The contracts stage then walks every shared table, file and parameter and matches each demand to a supplier. It reports a demand nobody meets, a supplier that does something different from what is demanded, and the same treatment applied twice. Before reporting an unmet demand it sends a second look into the files that write the data, and if nothing in the repository produces the data at all, it asks the maintainers instead.
 
+## Branches from the same data
+
+Some problems are invisible file by file. Training and scoring, a backtest and the production job, or every model in a horse race each start from the same data and are supposed to treat it the same way. When one branch winsorizes before imputing and the other after, or one restricts the sample to 1992Q1 and the other does not, each file looks fine on its own.
+
+The block wave finds the points where the data lineage splits: a table or file read by several pieces of code. Each reader, plus what only it feeds downstream, is one branch. A worker describes each branch as an ordered list of steps applied to the shared input (filters, conversions, imputation, splits, fits), each step quoting its line and listing its parameters. A second worker lines the branches of one split up side by side, decides which are meant to match (from the code, the docs and any rules: competing models must see the same sample and preprocessing; a summary table and a model fit need not), and reports missing steps, different orders, different parameters and different definitions. Those go to the verifier like any other finding.
+
+To say outright which branches must match, write it as a rule: `repo-audit rule "train.py and score.py apply the same transformations to features"`.
+
 ## How it works
 
 No stage reads the whole repository. Each one does a narrow job and writes its results to a shared store (the "board"); later stages read the board, not each other.
@@ -83,8 +91,11 @@ No stage reads the whole repository. Each one does a narrow job and writes its r
 | Contracts | strong | Matches what each file requires of its inputs to what upstream files ensure; reports unmet, mismatched and doubled treatment |
 | Probe | strong | A second look at one file when reconciliation or contracts is missing a fact; then both run again |
 | Supply | strong | For requirements the summaries could not settle, reads the producer's code next to the requirement |
+| Blocks | strong | Where the data lineage splits, describes each branch as ordered steps applied to the shared input |
+| Branches | strong | Lines up the branches of one split and reports where branches meant to match do not |
 | Rules | strong | Screens every file against the rules maintainers stated and the rules written in the docs |
 | Verify | verifier | A different model tries to refute each candidate against the code |
+| Second opinion | verifier_2 | Optional: a model from another family checks the important verdicts again; disagreement goes to a person |
 | Themes | strong | Groups confirmed findings by the cause behind them, so one fix is listed once |
 | Questions | cheap | Triage: merges duplicates, drops what the code can answer, marks what matters most |
 
@@ -99,6 +110,10 @@ Prompts are plain text files in `repo_audit/prompts/` and can be edited or overr
 ## Models and cost
 
 Any OpenAI-compatible endpoint works; OpenRouter is the default. `provider = "queue"` writes each prompt to `<output>/queue/pending/` and reads replies from `<output>/queue/replies/`, pausing at each stage until they are there; anything that can read and write files can then act as the model (other agents, a batch job). Three tiers are set in `[models]`: `cheap` reads every file, `strong` traces and reconciles, `verifier` attacks the findings and is best set to a different model family from `strong`. `provider = "command"` pipes each prompt to a command-line tool instead of an HTTP endpoint.
+
+`verifier_2` is optional. Set it to a model from a family different from `verifier`, and findings at or above `[verify] second_opinion_min_severity` (default `high`) are checked by both. Where they agree, the report says so; where one confirms and the other refutes, neither wins and the finding becomes a question for maintainers. Before relying on a new model as verifier, look at how many of its quotes the evidence check accepts: a model that paraphrases code cannot confirm anything.
+
+**Which code a worker sees.** For Python, the static pass records every function and every call between functions of the repository. Workers that need code (the producer check, second looks, the block wave, the verifier) are shown the whole function a line sits in, the repository helpers it calls, and one or two places it is called from, rather than a window of lines around a name. Other languages fall back to windows around the matching lines. `[limits] call_graph`, `function_max_lines`, `context_callers` and `context_callees` control this.
 
 `repo-audit plan` reports the size of a run before any money is spent. Measured on two open-source repositories:
 
@@ -115,6 +130,8 @@ Settings that control cost on a large repository, all under `[verify]` and `[lim
 - `skip_low_redundant`: leave "same constant typed twice" findings unverified.
 - `focus_terms`: findings mentioning any of these are verified whatever their severity, e.g. `["leak", "evaluation period"]`.
 - `probe_rounds`, `max_probes_per_round`: how many second looks reconcile may ask for.
+- `rule_min_severity`, `branch_min_severity`: suspected rule breaches and branch differences below these are listed but not verified.
+- `max_forks`, `max_branches`, `block_max_files`, `block_code_lines`: how many splits in the data flow are described, and how much code each branch's worker sees.
 
 ## What it does not do
 

@@ -15,6 +15,7 @@ from collections import Counter, defaultdict, deque
 from pathlib import Path, PurePosixPath
 
 from . import evidence
+from .context import code_context, terms_for
 from .core import (CONFIDENCES, SEVERITIES, Ctx, as_list, dicts, norm_words, pick, sha, text_of)
 from .names import base_entity, entity_field, norm_entity
 from .store import id_num
@@ -863,16 +864,19 @@ def run_supply(ctx: Ctx) -> dict:
             where = first["evidence"][0] if first["evidence"] else {}
             body.append(f"R{n}. {item['requirement']}\n    required by {where.get('path', '?')}: "
                         f"{(where.get('quote') or '').strip()[:200]}")
+        listed = []
         for rel in producers:
-            body.append(f"\nPRODUCER: {rel}\n{_excerpt_for(ctx, rel, subject, asked, cap=260)}")
+            listing, files_shown = code_context(ctx, rel, terms_for(subject, asked, rel), cap=260)
+            body.append(f"\nPRODUCER: {rel}\n{listing}")
+            listed += files_shown
         text = "\n".join(body)
-        units.append((subject, sha(prompt_hash, model, text), (subject, items, producers, text)))
+        units.append((subject, sha(prompt_hash, model, text), (subject, items, producers, text, listed)))
 
     def worker(payload):
         return ctx.llm.complete_json("supply", system, payload[3])
 
     def apply(uid, payload, res):
-        subject, items, producers, _ = payload
+        subject, items, producers, _, listed = payload
         ctx.store.clear_unit("supply", uid)
         keep = set()
         for check in dicts(res.get("checks")):
@@ -882,7 +886,7 @@ def run_supply(ctx: Ctx) -> dict:
                 continue
             item = items[int(m.group(1)) - 1]
             shown = ctx.check_evidence(check.get("evidence"), producers[0])
-            shown = [e for e in shown if e["path"] in producers]
+            shown = [e for e in shown if e["path"] in listed]
             if status == "mismatched" and not shown:
                 continue  # "does it differently" must point at the line that does it
             ev = [e for c in item["demand"] for e in c["evidence"]][:3] + shown[:3]
@@ -1008,27 +1012,6 @@ def run_themes(ctx: Ctx) -> dict:
 # ==========================================================================
 # probes: a targeted second look at one file
 # ==========================================================================
-def _excerpt_for(ctx: Ctx, rel: str, entity: str, question: str = "", cap: int = 300) -> str:
-    lines = ctx.lines(rel)
-    words = [] if entity.startswith("file:") and entity[5:] == rel else [
-        w.lower() for w in re.split(r"[^A-Za-z0-9_]+", entity.split(":", 1)[-1]) if len(w) >= 3]
-    # identifiers the question names: snake_case, CamelCase, dotted, or followed by "("
-    words += [w.lower() for w in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", question)
-              if len(w) >= 4 and ("_" in w or re.search(r"[a-z][A-Z]", w) or w.isupper())]
-    if len(lines) <= cap:
-        return evidence.numbered(lines, 1, len(lines))
-    hits = [(i, i) for i, line in enumerate(lines, 1) if any(w in line.lower() for w in words)]
-    windows = evidence.merge_windows(hits, 20, len(lines)) or [(1, min(len(lines), cap))]
-    out, used = [], 0
-    for a, b in windows:
-        if used >= cap:
-            break
-        b = min(b, a + cap - used - 1)
-        out.append(evidence.numbered(lines, a, b))
-        used += b - a + 1
-    return "\n    ...\n".join(out)
-
-
 def pending_probes(ctx: Ctx) -> int:
     return ctx.store.rows("SELECT COUNT(*) c FROM probes WHERE status='pending'")[0]["c"]
 
@@ -1058,7 +1041,8 @@ def run_probes(ctx: Ctx) -> dict:
             "probe", system,
             f"FILE: {probe['file']}\nSUBJECT: {probe['entity']}\nQUESTION: {probe['question']}\n\n"
             f"LISTING (the parts of the file that mention the subject)\n"
-            + _excerpt_for(ctx, probe["file"], probe["entity"], probe["question"]))
+            + code_context(ctx, probe["file"], terms_for(probe["entity"], probe["question"], probe["file"]),
+                           cap=300, other_files=False)[0])
 
     def apply(uid, probe, res):
         rel = probe["file"]
@@ -1128,60 +1112,27 @@ def run_verify(ctx: Ctx) -> dict:
         if (not in_focus and finding["type"] == "rule_violation" and SEVERITIES.index(finding["severity"])
                 > SEVERITIES.index(ctx.cfg["verify"]["rule_min_severity"])):
             continue  # minor suspected rule breaches are listed, not verified
+        if (not in_focus and finding["type"] == "branch_divergence" and SEVERITIES.index(finding["severity"])
+                > SEVERITIES.index(ctx.cfg["verify"]["branch_min_severity"])):
+            continue  # minor differences between branches are listed, not verified
         if (not in_focus and ctx.cfg["verify"]["skip_low_redundant"] and finding["severity"] == "low"
                 and finding["type"] == "redundant_logic"):
             continue  # "same constant typed twice" is rarely worth a verifier call on a large repo
         linked = {q["id"] for q in ctx.store.questions("finding=? AND status='answered'", (finding["id"],))}
-        relevant = _relevant_notes(finding, notes, linked)
-        shas = [files[p]["sha"] for p in finding["files"] if p in files]
-        extra = ctx.store.meta_get(f"more:{finding['fingerprint']}") or []
-        units.append((finding["fingerprint"],
-                      sha(prompt_hash, model, finding["fingerprint"], *shas, json.dumps(extra),
-                          *(n["statement"] for n in relevant)),
-                      (finding, relevant, extra)))
+        units.append((finding, _relevant_notes(finding, notes, linked),
+                      ctx.store.meta_get(f"more:{finding['fingerprint']}") or []))
 
-    todo_unused = {_search_term(u[2][0]["files"][0]) for u in units
-                   if u[2][0]["type"] == "unused_file" and ctx.store.unit_hash("verify", u[0]) != u[1]}
-    search = _text_search(ctx, todo_unused)
-
-    def build(finding: dict, relevant: list[dict], extra: list[dict]) -> str:
-        out = ["CANDIDATE FINDING", f"type: {finding['type']}", f"title: {finding['title']}",
-               f"detail: {finding['detail']}"]
-        nums = [n for n in (id_num(c) for c in finding["claims"]) if n is not None]
-        if nums:
-            out.append("\nSUPPORTING CLAIMS (recorded by other workers; they may be wrong)")
-            out += [_format_claim(c) for c in ctx.store.claims(f"n IN ({','.join(map(str, nums))})")]
-        if relevant:
-            out.append("\nMAINTAINER ANSWERS AND NOTES (authoritative about intent)")
-            out += [f"- {n['statement']}" for n in relevant]
-        if finding["type"] == "unused_file":
-            target = finding["files"][0]
-            found = [h for h in search.get(_search_term(target), []) if h[0] != target][:15]
-            out.append(f"\nTEXT SEARCH for '{_search_term(target)}' in the rest of the repository")
-            out += [f"- {p}:{i}: {t}" for p, i, t in found] or ["- no matches"]
-        out.append("\nCODE EXCERPTS")
-        budget = limits["verify_max_lines"]
-        by_path: dict[str, list] = defaultdict(list)
-        for ev in finding["evidence"] + extra:
-            by_path[ev["path"]].append((ev["line_start"], ev["line_end"]))
-        if extra:
-            out.append("(includes the additional code you asked for; no further requests are possible)")
-        for path, spans in by_path.items():
-            lines = ctx.lines(path)
-            for a, b in evidence.merge_windows(spans, limits["verify_context_lines"], len(lines)):
-                if budget <= 0:
-                    break
-                b = min(b, a + budget - 1)
-                out.append(f"### {path} (lines {a}-{b} of {len(lines)})")
-                out.append(evidence.numbered(lines, a, b))
-                budget -= b - a + 1
-        return "\n".join(out)
+    search = _text_search(ctx, {_search_term(f["files"][0]) for f, _, _ in units if f["type"] == "unused_file"})
+    # The input is built up front and hashed whole: it includes callers from other files,
+    # so a change anywhere in what the verifier sees is a reason to verify again.
+    units = [(f["fingerprint"], sha(prompt_hash, model, body), (f, rel, extra, body))
+             for f, rel, extra in units for body in [_verify_body(ctx, f, rel, extra, search)]]
 
     def worker(payload):
-        return ctx.llm.complete_json("verify", system, build(*payload))
+        return ctx.llm.complete_json("verify", system, payload[3])
 
     def apply(uid, payload, res):
-        finding, _, extra = payload
+        finding, _, extra, _ = payload
         verdict = pick(res.get("verdict"), {"confirmed", "refuted", "needs_human", "needs_code"}, None)
         if not verdict:
             raise ValueError("verifier returned no verdict")
@@ -1197,6 +1148,8 @@ def run_verify(ctx: Ctx) -> dict:
         status = verdict
         if verdict == "confirmed" and not ev and finding["type"] not in NO_QUOTE_TYPES:
             status = "unconfirmed"  # said yes but could not point at the code
+        ctx.store.meta_set(f"verdict:{finding['fingerprint']}", {
+            "status": status, "severity": finding["severity"], "reasoning": text_of(res.get("reasoning"), 1500)})
         title = text_of(res.get("title"), 200) if verdict == "confirmed" else ""
         detail = text_of(res.get("detail")) if verdict == "confirmed" else ""
         ctx.store.run(
@@ -1220,6 +1173,142 @@ def run_verify(ctx: Ctx) -> dict:
     if ctx.rerun_verify:  # some findings asked for more code: one more pass for those
         ctx.rerun_verify = False
         return run_verify_again(ctx, stats)
+    return stats
+
+
+def _verify_body(ctx: Ctx, finding: dict, relevant: list[dict], extra: list[dict], search: dict) -> str:
+    limits = ctx.cfg["limits"]
+    out = ["CANDIDATE FINDING", f"type: {finding['type']}", f"title: {finding['title']}",
+           f"detail: {finding['detail']}"]
+    nums = [n for n in (id_num(c) for c in finding["claims"]) if n is not None]
+    if nums:
+        out.append("\nSUPPORTING CLAIMS (recorded by other workers; they may be wrong)")
+        out += [_format_claim(c) for c in ctx.store.claims(f"n IN ({','.join(map(str, nums))})")]
+    if relevant:
+        out.append("\nMAINTAINER ANSWERS AND NOTES (authoritative about intent)")
+        out += [f"- {n['statement']}" for n in relevant]
+    if finding["type"] == "unused_file":
+        target = finding["files"][0]
+        found = [h for h in search.get(_search_term(target), []) if h[0] != target][:15]
+        out.append(f"\nTEXT SEARCH for '{_search_term(target)}' in the rest of the repository")
+        out += [f"- {p}:{i}: {t}" for p, i, t in found] or ["- no matches"]
+    out.append("\nCODE EXCERPTS")
+    if extra:
+        out.append("(includes the additional code you asked for; no further requests are possible)")
+    budget = limits["verify_max_lines"]
+    graph = ctx.callgraph
+    by_path: dict[str, list] = defaultdict(list)
+    for ev in finding["evidence"] + extra:
+        by_path[ev["path"]].append((ev["line_start"], ev["line_end"]))
+    cited_functions = []  # (path, function) of the evidence, for showing callers afterwards
+    shown: dict[str, list] = defaultdict(list)
+    for path, spans in by_path.items():
+        lines = ctx.lines(path)
+        windows = []
+        for a, b in spans:
+            fn = graph.enclosing(path, a) if limits["call_graph"] else None
+            if fn and fn["kind"] == "function" and fn["end"] - fn["line"] < limits["function_max_lines"] \
+                    and fn["end"] >= b:
+                windows.append((fn["line"], fn["end"]))  # the whole function the line sits in
+                cited_functions.append((path, fn))
+            else:
+                windows += evidence.merge_windows([(a, b)], limits["verify_context_lines"], len(lines))
+        for a, b in evidence.merge_windows(windows, 0, len(lines)):
+            if budget <= 0:
+                break
+            b = min(b, a + budget - 1)
+            out.append(f"### {path} (lines {a}-{b} of {len(lines)})")
+            out.append(evidence.numbered(lines, a, b))
+            shown[path].append((a, b))
+            budget -= b - a + 1
+    taken, seen = 0, set()
+    for path, fn in cited_functions:  # one level of callers: how the cited code is used
+        for site, line, caller in graph.callers(path, fn):
+            if (budget <= 0 or taken >= limits["context_callers"] or (site, line) in seen
+                    or any(a <= line <= b for a, b in shown[site])):
+                continue
+            seen.add((site, line))
+            other = ctx.lines(site)
+            box = graph.enclosing(site, line)
+            a, b = max(line - 10, box["line"] if box else 1), min(line + 12, box["end"] if box else len(other))
+            b = min(b, a + budget - 1)
+            out.append(f"### {site} (lines {a}-{b} of {len(other)}): calls {fn['name']}"
+                       + (f" from {caller}" if caller else ""))
+            out.append(evidence.numbered(other, a, b))
+            budget -= b - a + 1
+            taken += 1
+    return "\n".join(out)
+
+
+SECOND_NOTE = "\n\nSecond verifier"
+
+
+def run_second_opinion(ctx: Ctx) -> dict:
+    """Check important verdicts again with a model from another family.
+
+    Two models from one family tend to make the same mistakes. Where the second
+    disagrees with the first, neither wins: the finding goes to a person."""
+    model2 = ctx.cfg["models"].get("verifier_2")
+    if not model2:
+        return {"ran": 0, "skipped": 0, "failed": 0}
+    system, prompt_hash = ctx.prompt("verify")
+    model = ctx.llm.model_for("verify2")
+    cutoff = SEVERITIES.index(ctx.cfg["verify"]["second_opinion_min_severity"])
+    notes = ctx.human_notes(200)
+    picked = []
+    for finding in ctx.store.findings("status IN ('confirmed','refuted','needs_human')"):
+        first = ctx.store.meta_get(f"verdict:{finding['fingerprint']}")
+        if not first or first["status"] not in ("confirmed", "refuted"):
+            continue
+        # either verifier's view of severity qualifies it: a refuted finding is often downgraded
+        if min(SEVERITIES.index(finding["severity"]), SEVERITIES.index(first["severity"])) > cutoff:
+            continue
+        picked.append((finding, first))
+    search = _text_search(ctx, {_search_term(f["files"][0]) for f, _ in picked if f["type"] == "unused_file"})
+    units = []
+    for finding, first in picked:
+        linked = {q["id"] for q in ctx.store.questions("finding=? AND status='answered'", (finding["id"],))}
+        extra = ctx.store.meta_get(f"more:{finding['fingerprint']}") or []
+        body = _verify_body(ctx, finding, _relevant_notes(finding, notes, linked), extra, search) + (
+            "\n\nThis is an independent second check. No further code can be requested: "
+            "if the code shown does not settle it, answer needs_human.")
+        units.append((finding["fingerprint"], sha(prompt_hash, model, body, first["status"]),
+                      (finding, first, body)))
+
+    def worker(payload):
+        return ctx.llm.complete_json("verify2", system, payload[2])
+
+    def apply(uid, payload, res):
+        finding, first, _ = payload
+        ctx.store.clear_unit("verify2", uid)
+        verdict = pick(res.get("verdict"), {"confirmed", "refuted", "needs_human", "needs_code"}, "needs_human")
+        second = {"model": model2, "verdict": verdict, "reasoning": text_of(res.get("reasoning"), 1500)}
+        ctx.store.meta_set(f"second:{uid}", second)
+        if verdict in ("confirmed", "refuted") and verdict != first["status"]:
+            ctx.add_questions("verify2", uid, [{
+                "text": f"Two independent checks disagree on whether this is a real problem: {finding['title']}",
+                "why": f"First check ({first['status']}): {first['reasoning']}\n"
+                       f"Second check ({verdict}): {second['reasoning']}"}],
+                subject=f"file:{finding['files'][0]}" if finding["files"] else None,
+                path=None, entity=finding["entity"], finding=finding["id"])
+
+    stats = ctx.run_units("verify2", units, worker, apply)
+    # Settle every picked finding from the stored verdicts, including those whose second check was
+    # cached: the first verifier may have run again and reset the status since.
+    for finding, first in picked:
+        second = ctx.store.meta_get(f"second:{finding['fingerprint']}")
+        if not second:
+            continue
+        current = ctx.store.findings("n=?", (finding["n"],))[0]
+        base = (current["notes"] or "").split(SECOND_NOTE)[0]
+        if second["verdict"] == first["status"]:
+            note, status = f"{SECOND_NOTE} ({second['model']}) agreed.", first["status"]
+        elif second["verdict"] in ("confirmed", "refuted"):
+            note = f"{SECOND_NOTE} ({second['model']}) disagreed: {second['reasoning']}"
+            status = "needs_human"
+        else:
+            note, status = f"{SECOND_NOTE} ({second['model']}) could not decide.", first["status"]
+        ctx.store.run("UPDATE findings SET status=?, notes=? WHERE n=?", (status, base + note, finding["n"]))
     return stats
 
 

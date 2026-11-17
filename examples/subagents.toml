@@ -12,6 +12,7 @@ provider = "queue"
 cheap = "haiku"
 strong = "sonnet"
 verifier = "opus"
+# verifier_2 = "..."   # optional second verifier; with subagents, a model of another family if you have one
 
 [limits]
 probe_rounds = 1

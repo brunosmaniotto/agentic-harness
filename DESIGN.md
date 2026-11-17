@@ -19,7 +19,7 @@ One SQLite file. The tables that matter:
 |---|---|
 | `source` | `static` (computed), `llm` (read from code), `docs` (stated in documentation), `human` (told by a maintainer) |
 | `kind` | `purpose`, `input`, `output`, `step`, `assumption`, `behavior`, `answer` |
-| `subject` | `system`, `path:<name>`, or `file:<path>` |
+| `subject` | `system`, `path:<name>`, `file:<path>`, or `block:<id>` (a branch of the data flow) |
 | `entity` | `kind:name#field`, e.g. `table:orders#price` or `param:sample_start`; null if not about anything shared |
 | `attribute`, `value` | for assumptions: `unit` / `cents`, `timezone` / `UTC` |
 | `statement` | one self-contained sentence |
@@ -51,8 +51,11 @@ Each stage builds a list of units `(id, input_hash, payload)` and hands it to `C
 | contracts | a subject with at least one `requires` claim | the demand and supply claims shown | `unmet_demand`, `mismatched_supply`, `double_supply` findings; supplier probes; questions |
 | probe | probe | probe text, file content | `llm` claims, questions |
 | supply | a subject with requirements still unclear after the loop | the requirements and the producer excerpt | `unmet_demand`, `mismatched_supply` findings |
+| blocks | one branch of a fork in the data lineage | the branch's files, their claims, and code chosen from the call graph | ordered steps (in `meta`, and as `step` claims under `block:<id>` with no entity, so reconcile and contracts ignore them) |
+| branches | one fork | the step lists of its branches and the rules | expected-match verdicts per group; `branch_divergence` findings; questions |
 | rules | a file's claims (packed) against the rule list | the claims and the rules | `rule_violation` findings |
 | verify | candidate finding | finding, file contents, relevant maintainer statements, any extra code it asked for | verdict, corrected evidence, a question if it needs a person; `needs_code` earns one extra pass with the requested code |
+| second opinion | a confirmed or refuted finding at or above `second_opinion_min_severity`, when `verifier_2` is set | same input as verify, plus the first verdict | agreement noted; disagreement sets `needs_human` and asks a question |
 | themes | one | the confirmed findings | groups stored in `meta`, shown first in the report |
 | questions | batch of open questions | their text | merges, drops, priority |
 
@@ -88,6 +91,9 @@ Across files:
 - **Convention-loaded files.** When five or more unreached files share a name, or make up at least half of a directory, they are almost certainly discovered by a framework. They become one question to maintainers, not many findings.
 - **Data lineage.** Entities read but never written are external inputs; written but never read are final outputs. Test files are left out.
 - **Duplicates.** Functions with identical bodies (by syntax tree), and file pairs sharing most of their lines.
+- **Call graph (Python).** Every function and class at any depth, and every call to a function defined in the repository, with the calling function. A call is resolved to a definition in the same file first, then in an imported file, then to the only definition of that name; ambiguous names are left unresolved rather than guessed. `context.py` uses this to choose code for workers.
+
+**Forks and blocks** (`blocks.py`). Readers and writers of each table, file, topic and API come from static analysis plus the `input` and `output` claims of the file wave. A fork is a set of two or more code files reading the same data (pieces of data with the same readers are one fork; figures and documents are not inputs). A branch is one reader plus the files downstream of it that no other reader also feeds; files fed by several branches are joins, shown but not compared. Differences found from overlapping forks are merged when they name the same files and are worded alike once file names are set aside; a difference whose title names only files outside its branches is dropped as an answer to another input.
 
 ### Adding a language
 
@@ -104,7 +110,9 @@ repo_audit/
   llm.py        model client: OpenAI-compatible HTTP, command, or mock; cache; budget
   skeleton.py   static analysis
   core.py       stage context, resumable units, claim and question intake
-  stages.py     every stage
+  context.py    which code a worker sees: call graph, whole functions, callers and callees
+  stages.py     every stage but blocks and branches
+  blocks.py     forks in the data lineage, the block wave, branch comparison
   human.py      answers and notes
   report.py     report.md, questions.md, findings.json, claims.jsonl
   pipeline.py   stage order, plan

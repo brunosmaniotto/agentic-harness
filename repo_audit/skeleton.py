@@ -398,6 +398,7 @@ def analyze_python(rel: str, text: str, rec: dict, env: dict) -> None:
                                 "kind": "class" if isinstance(node, ast.ClassDef) else "function",
                                 "line": node.lineno, "end": node.end_lineno})
 
+    rec["functions"], rec["calls"] = _py_call_graph(tree)
     pkg = list(PurePosixPath(rel).parts[:-1])
 
     def link(dotted: str, climb: bool = True) -> bool:
@@ -456,6 +457,35 @@ def analyze_python(rel: str, text: str, rec: dict, env: dict) -> None:
         for direction, items in (("write", writes), ("read", reads)):
             for name in dict.fromkeys(n for n, _ in items):
                 _add_io(rec, direction, "table", name, line)
+
+
+def _py_call_graph(tree) -> tuple[list[dict], list[list]]:
+    """Every function and class at any depth, and every call made inside each.
+
+    Calls are recorded by the callee's last name (`df.pipe(clean)` -> pipe, `utils.clean(x)`
+    -> clean). Resolution to a definition happens once the whole repository is known."""
+    functions, calls, seen = [], [], set()
+
+    def visit(node, stack):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                qual = ".".join(stack + [child.name])
+                functions.append({"name": child.name, "qual": qual,
+                                  "kind": "class" if isinstance(child, ast.ClassDef) else "function",
+                                  "line": child.lineno, "end": child.end_lineno or child.lineno})
+                visit(child, stack + [child.name])
+                continue
+            if isinstance(child, ast.Call):
+                chain = _chain(child.func)
+                if chain:
+                    key = (chain[-1], ".".join(stack))
+                    if key not in seen:  # the first call site per caller is enough
+                        seen.add(key)
+                        calls.append([chain[-1], child.lineno, ".".join(stack) or None])
+            visit(child, stack)
+
+    visit(tree, [])
+    return functions, calls
 
 
 def _py_call(node: ast.Call, rec: dict, consts: dict, link) -> None:
@@ -668,7 +698,8 @@ def build(cfg: dict, log=print) -> dict:
         files[rel] = {"lang": lang, "role": _role(rel, lang), "bytes": size, "lines": 0,
                       "sha": "", "skipped": skipped, "entry": False, "parse_error": False,
                       "dynamic_imports": False, "imports": set(), "references": set(),
-                      "external": set(), "defs": [], "io": []}
+                      "external": set(), "defs": [], "io": [],
+                      "functions": [], "calls": []}
 
     mod_index: dict[str, list[str]] = defaultdict(list)
     base_index: dict[str, list[str]] = defaultdict(list)
@@ -836,6 +867,12 @@ def build(cfg: dict, log=print) -> dict:
     if parse_errors:
         notes.append(f"{len(parse_errors)} file(s) could not be parsed (e.g. Python 2 syntax); "
                      "their imports and I/O were read with a rougher method.")
+
+    # Keep only calls to something defined in this repository: the rest (pandas, builtins)
+    # cannot be shown as code anyway.
+    defined = {f["name"] for r in files.values() for f in r["functions"]}
+    for rec in files.values():
+        rec["calls"] = [c for c in rec["calls"] if c[0] in defined]
 
     by_lang = Counter(r["lang"] for r in files.values() if not r["skipped"])
     for rec in files.values():

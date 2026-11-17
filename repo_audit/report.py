@@ -20,6 +20,7 @@ _TYPE_LABEL = {
     "mismatched_supply": "Supplied differently from what is required",
     "double_supply": "Done twice along the same path",
     "rule_violation": "Breaks a stated rule",
+    "branch_divergence": "Branches from the same data that differ",
     "local_risk": "Suspicious code",
     "unused_file": "Unused file",
     "duplicate_function": "Duplicated function",
@@ -134,7 +135,27 @@ def write_report(ctx: Ctx, stopped: str = "") -> None:
             f"- Board: {claims_total} claim(s); {claims_bad} discarded because the quoted "
             "evidence was not found in the file",
             f"- Model usage: {usage['calls']} call(s), {usage['tokens']:,} tokens"
-            + (f", ${usage['usd']:.2f}" if usage["usd"] else ""), ""]
+            + (f", ${usage['usd']:.2f}" if usage["usd"] else "")]
+    seconds = [store.meta_get(f"second:{f['fingerprint']}") for f in findings]
+    seconds = [s_ for s_ in seconds if s_]
+    if seconds:
+        first = {f["fingerprint"]: store.meta_get(f"verdict:{f['fingerprint']}") or {} for f in findings}
+        agree = sum(1 for f in findings for s_ in [store.meta_get(f"second:{f['fingerprint']}")]
+                    if s_ and s_["verdict"] == first[f["fingerprint"]].get("status"))
+        split = sum(1 for f in findings for s_ in [store.meta_get(f"second:{f['fingerprint']}")]
+                    if s_ and s_["verdict"] in ("confirmed", "refuted")
+                    and s_["verdict"] != first[f["fingerprint"]].get("status"))
+        out.append(f"- Second verifier ({seconds[0]['model']}): checked {len(seconds)} finding(s); "
+                   f"agreed on {agree}, disagreed on {split} (sent to maintainers), "
+                   f"undecided on {len(seconds) - agree - split}")
+    forks = store.meta_get("forks") or []
+    if forks:
+        verdicts = [g for fk in forks for g in (store.meta_get(f"fork_result:{fk['id']}") or [])]
+        out.append(f"- Branches: {len(forks)} point(s) where the data flow splits, "
+                   f"{sum(len(fk['branches']) for fk in forks)} branch(es) described; "
+                   f"{sum(1 for g in verdicts if g['expectation'] == 'should_match')} group(s) judged "
+                   f"meant to match, {sum(1 for g in verdicts if g['expectation'] == 'unclear')} unclear")
+    out.append("")
     v = ctx.cfg["verify"]
     held = [f for f in by_status.get("candidate", [])
             if (f["type"] == "local_risk" and _SEV.get(f["severity"], 3) > _SEV[v["local_risk_min_severity"]])

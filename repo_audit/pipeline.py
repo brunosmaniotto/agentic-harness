@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import evidence, report, skeleton, stages
+from . import blocks, evidence, report, skeleton, stages
 from .core import Ctx, PendingWork
 from .llm import LLM, BudgetExceeded, LLMError
 from .store import Store
 
-MODEL_STAGES = ["docs", "leads", "system", "paths", "files", "reconcile", "rules", "verify",
+MODEL_STAGES = ["docs", "leads", "system", "paths", "files", "reconcile", "blocks", "rules", "verify",
                 "themes", "questions"]
 
 
@@ -78,10 +78,14 @@ def run(cfg: dict, only: set[str] | None = None, static_only: bool = False,
                 step(f"probe (round {done + 1})", stages.run_probes)
                 ctx.store.meta_set("probe_rounds_done", done + 1)
             step("supply", stages.run_supply)
+        if want("blocks"):
+            step("blocks", blocks.run_blocks)
+            step("branches", blocks.run_branches)
         if want("rules"):
             step("rules", stages.run_rules)
         if want("verify"):
             step("verify", stages.run_verify)
+            step("second opinion", stages.run_second_opinion)
         if want("themes"):
             step("themes", stages.run_themes)
         if want("questions"):

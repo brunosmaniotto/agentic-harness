@@ -66,6 +66,13 @@ class Ctx:
         self.rerun_verify = False
 
     # -- file access (always redacted, always the same text the models saw) --
+    @property
+    def callgraph(self):
+        if getattr(self, "_callgraph", None) is None:
+            from .context import CallGraph
+            self._callgraph = CallGraph(self.skel["files"])
+        return self._callgraph
+
     def lines(self, path: str) -> list[str]:
         with self._lock:
             hit = self._texts.get(path)

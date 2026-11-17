@@ -55,13 +55,17 @@ DEFAULTS: dict = {
         "command": [],
     },
     # Model ids for each tier. Any id the endpoint accepts.
-    "models": {"cheap": "", "strong": "", "verifier": ""},
+    # verifier_2: optional second verifier, ideally another model family. When set,
+    # findings at or above [verify] second_opinion_min_severity are checked by both,
+    # and a disagreement goes to a person.
+    "models": {"cheap": "", "strong": "", "verifier": "", "verifier_2": ""},
     # Which tier each stage uses.
     "stages": {
         "docs": "cheap", "leads": "cheap", "system": "strong", "paths": "strong",
         "files": "cheap", "canonicalize": "strong", "reconcile": "strong",
         "contracts": "strong", "supply": "strong", "rules": "strong", "themes": "strong",
-        "probe": "strong", "verify": "verifier", "questions": "cheap",
+        "probe": "strong", "verify": "verifier", "verify2": "verifier_2", "questions": "cheap",
+        "blocks": "strong", "branches": "strong",
     },
     "budget": {"max_calls": 5000, "max_tokens": 50_000_000, "max_usd": 0.0},
     "limits": {
@@ -82,12 +86,24 @@ DEFAULTS: dict = {
         "reconcile_pack_small": 12,   # subjects with this many claims or fewer share a call
         "reconcile_pack_claims": 45,  # claims per shared call
         "verify_context_lines": 30,
+        # Code shown to workers is chosen from the call graph (Python): whole functions up to
+        # function_max_lines, the repository helpers they call, and a few places they are called from.
+        "call_graph": True,
+        # Blocks and branches: forks in the data lineage and the branches that leave them.
+        "max_forks": 20,
+        "max_branches": 6,         # per fork
+        "block_max_files": 8,      # per branch
+        "block_code_lines": 500,   # code shown to one block worker, shared across its files
+        "function_max_lines": 120,
+        "context_callers": 2,
+        "context_callees": 3,
         "verify_max_lines": 600,
         "max_static_findings": 150,  # per type
         "dup_function_min_lines": 8,
         "near_dup_jaccard": 0.7,
     },
-    "verify": {"static": True, "local_risk_min_severity": "medium", "rule_min_severity": "low",
+    "verify": {"static": True, "local_risk_min_severity": "medium", "rule_min_severity": "low", "branch_min_severity": "medium",
+               "second_opinion_min_severity": "high",
                "skip_low_redundant": False,
                # e.g. ["leak", "evaluation period"]: matching findings are verified whatever their severity
                "focus_terms": []},
@@ -160,6 +176,7 @@ concurrency = 6
 cheap = ""       # e.g. "anthropic/claude-haiku-5.5"
 strong = ""      # e.g. "anthropic/claude-sonnet-5.5"
 verifier = ""    # e.g. "openai/gpt-6.1-sol"
+verifier_2 = ""   # optional: a second verifier from another family checks high-severity verdicts
 
 [budget]
 max_calls = 5000

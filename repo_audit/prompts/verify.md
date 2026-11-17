@@ -10,6 +10,7 @@ You receive the finding, the claims it cites, anything maintainers have told the
 - For a requirement said to be unmet: you are shown where the data is produced. Does anything there, or anywhere else shown, establish what the consumer requires, perhaps in other words or one step earlier? Does the consumer in fact establish it itself before relying on it? If the producer's code is not among the excerpts, ask for it.
 - For supply that is said not to match the demand: are the two really about the same property of the same data, and do the terms really differ?
 - For a rule said to be broken: does this code actually do what the rule forbids, on a path that runs, or does it only look that way from a summary? A rule is broken by code, not by a variable name.
+- For branches said to diverge: do the cited lines really do what the branches' steps say, does the other branch really lack or change that step (look at where it reads the shared input), and is there a reason in the code or the maintainers' notes for the branches to differ? If whether they are meant to match depends on intent the repository does not state, the verdict is needs_human.
 - For duplicated code: are the copies really the same, and are both live?
 - Has a maintainer already said this is intended?
 
