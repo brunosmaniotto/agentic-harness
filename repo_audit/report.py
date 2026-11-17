@@ -6,28 +6,13 @@ import time
 from collections import Counter
 
 from .core import Ctx
+from .dashboard import TYPE_LABEL, write_dashboard
 from .human import PLACEHOLDER
 from .stages import open_questions, pipelines
 
 _SEV = {"high": 0, "medium": 1, "low": 2}
-_TYPE_LABEL = {
-    "conflicting_assumption": "Conflicting assumptions",
-    "divergent_use": "Same data, used differently",
-    "redundant_logic": "Same logic in more than one place",
-    "doc_drift": "Documentation and code disagree",
-    "contract_gap": "Relies on something nothing guarantees",
-    "unmet_demand": "Required, but nothing supplies it",
-    "mismatched_supply": "Supplied differently from what is required",
-    "double_supply": "Done twice along the same path",
-    "rule_violation": "Breaks a stated rule",
-    "branch_divergence": "Branches from the same data that differ",
-    "local_risk": "Suspicious code",
-    "unused_file": "Unused file",
-    "duplicate_function": "Duplicated function",
-    "near_duplicate_files": "Near-duplicate files",
-    "lead": "Lead from the documentation system",
-    "other": "Other",
-}
+# Labels live with the dashboard, which report.py imports; the other way round would be circular.
+_TYPE_LABEL = TYPE_LABEL
 
 
 def _evidence_lines(evidence: list[dict], limit: int = 6) -> list[str]:
@@ -291,3 +276,4 @@ def write_report(ctx: Ctx, stopped: str = "") -> None:
             fh.write(json.dumps({k: c[k] for k in (
                 "id", "source", "stage", "kind", "subject", "entity", "attribute", "value",
                 "statement", "evidence", "evidence_ok", "confidence")}) + "\n")
+    write_dashboard(ctx)

@@ -29,6 +29,7 @@ Output, in `.repo-audit/`:
 | File | What it is |
 |---|---|
 | `report.md` | Confirmed findings with file and line, what is waiting on a person, and a map of the system |
+| `dashboard.html` | The confirmed findings folded into unique issues and ranked by urgency, in one self-contained page: severity filter, type filter, search, and rows that open to show the detail, the quoted evidence and every finding folded into them |
 | `questions.md` | The questions worth a person's time: those that decide a finding, then those triage marked important |
 | `questions_all.md` | The remaining open questions |
 | `findings.json` | Every finding, including refuted ones, for other tools |

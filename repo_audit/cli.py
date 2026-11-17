@@ -70,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         ctx = pipeline.build_context(cfg)
         report.write_report(ctx)
         print(f"Report: {ctx.out / 'report.md'}")
+        print(f"Dashboard: {ctx.out / 'dashboard.html'}")
     elif args.cmd == "status":
         store = pipeline.open_store(cfg)
         print("Claims by source:")

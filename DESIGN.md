@@ -69,6 +69,10 @@ Reconcile and probe alternate up to `limits.probe_rounds` times: reconcile asks 
 
 A subject is reconciled only if at least two different places said something comparable about it: an assumption, a behavior, or a statement in a document or from a person. A list of readers and writers alone gives nothing to disagree about.
 
+## The dashboard (`dashboard.py`)
+
+Stages confirm the same bug from different angles and in different words: the file wave flags a mismatched array as a local risk, the rule screen flags the same lines as a broken rule. Two confirmed findings are the same issue when they share a file and either reconcile or contracts tied both to the same field of one shared thing, or their titles overlap (Jaccard of title words at least 0.22, file names left out). A finding joins a group only if it matches more than half of the group's members: plain transitive merging chained unrelated bugs into one row on a real run. Rows rank by severity, then correctness types ahead of documentation and hygiene, then the number of independent stages that found the issue. The page embeds its data as JSON and needs no other files.
+
 ## Invariants
 
 These are what the output's reliability rests on. Changes should keep them.
@@ -115,6 +119,7 @@ repo_audit/
   blocks.py     forks in the data lineage, the block wave, branch comparison
   human.py      answers and notes
   report.py     report.md, questions.md, findings.json, claims.jsonl
+  dashboard.py  dashboard.html: confirmed findings folded into unique issues, ranked
   pipeline.py   stage order, plan
   cli.py        commands
   prompts/      one text file per stage, plus _common.md prepended to each

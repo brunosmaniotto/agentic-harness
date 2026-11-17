@@ -103,6 +103,7 @@ def run(cfg: dict, only: set[str] | None = None, static_only: bool = False,
     report.write_report(ctx, stopped)
     usage = ctx.store.usage()
     log(f"Report: {ctx.out / 'report.md'}")
+    log(f"Dashboard: {ctx.out / 'dashboard.html'}")
     log(f"Questions: {ctx.out / 'questions.md'} ({len(stages.open_questions(ctx))} open in total)")
     log(f"Model usage so far: {usage['calls']} calls, {usage['tokens']:,} tokens"
         + (f", ${usage['usd']:.2f}" if usage["usd"] else ""))
