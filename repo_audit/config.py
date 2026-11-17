@@ -49,6 +49,11 @@ DEFAULTS: dict = {
         "json_mode": False,
         "temperature": 0,  # set to -1 to omit the parameter
         "max_output_tokens": 4000,
+        # Every prompt asks for one JSON object. A route with extended thinking can spend the
+        # whole max_output_tokens on hidden reasoning and return no content at all ("empty
+        # reply"), however large the limit. This sends {"reasoning": {"enabled": false}}
+        # (OpenRouter's switch). Set false for an endpoint that rejects unknown fields.
+        "disable_reasoning": True,
         "extra_headers": {},
         # provider = "command": argv of a CLI that reads the prompt on stdin
         # and prints the reply on stdout, e.g. ["claude", "-p"].

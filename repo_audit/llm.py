@@ -207,6 +207,8 @@ class LLM:
             body["temperature"] = llm["temperature"]
         if llm["json_mode"]:
             body["response_format"] = {"type": "json_object"}
+        if llm.get("disable_reasoning"):
+            body["reasoning"] = {"enabled": False}
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         headers.update(llm.get("extra_headers") or {})
         url = llm["base_url"].rstrip("/") + "/chat/completions"
