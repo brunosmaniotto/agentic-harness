@@ -119,7 +119,10 @@ def write_dashboard(ctx: Ctx) -> tuple[str, int, int]:
     rows = [_row(g) for g in cluster(findings)]
     folded = len(findings) - len(rows)
     name = ctx.cfg["repo"].get("name") or ctx.cfg["repo"]["path"].rstrip("/").rsplit("/", 1)[-1]
-    data = json.dumps({"repo": name, "rows": rows, "folded": folded}).replace("</", "<\\/")
+    tidy = [{k: c.get(k) for k in ("tier", "kind", "name", "path", "line", "end", "lines", "reason",
+                                   "decided_by", "note", "refs")}
+            for c in (ctx.store.meta_get("cleanup") or [])]
+    data = json.dumps({"repo": name, "rows": rows, "folded": folded, "cleanup": tidy}).replace("</", "<\\/")
     path = ctx.out / "dashboard.html"
     path.write_text(PAGE.replace("__TITLE__", html.escape(f"Audit: {name}")).replace("__DATA__", data),
                     encoding="utf-8")
@@ -147,12 +150,21 @@ input{flex:1;min-width:200px}
 .body p{white-space:pre-wrap;margin:6px 0 10px}.ev{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;border-left:3px solid var(--line);padding:4px 10px;margin:6px 0;white-space:pre-wrap;overflow-x:auto}
 .ev b{color:var(--accent);font-weight:600}h4{margin:12px 0 4px;font-size:13px;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
 .empty{color:var(--mute);padding:20px 0}
+.tabs{margin:14px 0 18px;border-bottom:1px solid var(--line);gap:0}.tab{border:0;background:none;color:var(--mute);font:inherit;padding:8px 14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab[aria-pressed=true]{color:var(--ink);border-bottom-color:var(--ink);font-weight:600}
+.tier{font-size:12px;font-weight:700}.tier.safe{color:var(--accent)}.tier.probable{color:var(--medium)}.tier.check{color:var(--high)}
 @media (max-width:640px){.head{grid-template-columns:1fr}.body{padding-left:14px}}
 </style></head><body><main>
-<h1 id="h"></h1><p class="sub" id="sub"></p>
+<h1 id="h"></h1>
+<div class="bar tabs"><button class="tab" id="tab-issues" aria-pressed="true">Issues</button><button class="tab" id="tab-clean" aria-pressed="false">Potential clean up</button></div>
+<section id="issues"><p class="sub" id="sub"></p>
 <div class="bar" id="chips"></div>
 <div class="bar"><select id="type"><option value="">All types</option></select><input id="q" type="search" placeholder="Search titles, files, details"></div>
-<div id="list"></div>
+<div id="list"></div></section>
+<section id="clean" hidden><p class="sub" id="csub"></p>
+<div class="bar" id="cchips"></div>
+<div class="bar"><select id="ckind"><option value="">All kinds</option></select><input id="cq" type="search" placeholder="Search names and files"></div>
+<div id="clist"></div></section>
 </main>
 <script>
 const D=__DATA__;const sev=new Set(["high","medium","low"]);
@@ -181,5 +193,33 @@ function draw(){const q=$("q").value.toLowerCase(),t=$("type").value,list=$("lis
   head.onclick=()=>row.classList.toggle("open");row.append(head,body);list.append(row)});
  if(!shown)list.append(el("div","empty","Nothing matches these filters."))}
 draw();
+const C=D.cleanup.filter(c=>c.kind!=="output"),OUT=D.cleanup.filter(c=>c.kind==="output");
+const TL={safe:"Safe to remove",probable:"Probably unused",check:"Check first"},tiers=new Set(["safe","probable","check"]);
+$("tab-clean").textContent="Potential clean up ("+C.length+")";$("tab-issues").textContent="Issues ("+D.rows.length+")";
+function show(which){$("issues").hidden=which!=="issues";$("clean").hidden=which!=="clean";
+ $("tab-issues").setAttribute("aria-pressed",which==="issues");$("tab-clean").setAttribute("aria-pressed",which==="clean")}
+$("tab-issues").onclick=()=>show("issues");$("tab-clean").onclick=()=>show("clean");
+const lines=t=>C.filter(c=>c.tier===t).reduce((a,c)=>a+c.lines,0);
+$("csub").textContent=C.length+" candidate(s), "+C.reduce((a,c)=>a+c.lines,0).toLocaleString()+" lines. Not bugs: code and data that may no longer be needed. "+(OUT.length?OUT.length+" output(s) nothing in the repository reads are listed in cleanup.md.":"");
+["safe","probable","check"].forEach(t=>{const n=C.filter(c=>c.tier===t).length;const b=el("button","chip",TL[t]+" ("+n+", "+lines(t).toLocaleString()+" lines)");
+ b.setAttribute("aria-pressed","true");b.onclick=()=>{tiers.has(t)?tiers.delete(t):tiers.add(t);b.setAttribute("aria-pressed",tiers.has(t));cdraw()};$("cchips").append(b)});
+[...new Set(C.map(c=>c.kind))].sort().forEach(k=>{const o=el("option",null,k.replace("_"," "));o.value=k;$("ckind").append(o)});
+$("ckind").onchange=cdraw;$("cq").oninput=cdraw;
+function cdraw(){const q=$("cq").value.toLowerCase(),k=$("ckind").value,list=$("clist");list.textContent="";let shown=0;
+ const order={safe:0,probable:1,check:2};
+ C.slice().sort((a,b)=>order[a.tier]-order[b.tier]||b.lines-a.lines).forEach(c=>{
+  if(!tiers.has(c.tier)||(k&&c.kind!==k))return;if(q&&!(c.name+" "+c.path).toLowerCase().includes(q))return;shown++;
+  const row=el("div","row"),head=el("div","head"),mid=el("div");
+  head.append(el("span","tier "+c.tier,TL[c.tier]));
+  mid.append(el("div","t",c.kind.replace("_"," ")+" "+c.name));
+  mid.append(el("div","meta",c.path+(c.kind==="file"?"":":"+c.line+"-"+c.end)+" · "+c.reason));
+  head.append(mid);head.append(el("span","n",c.lines+" lines"));
+  const body=el("div","body");body.append(el("p","meta","Decided by "+c.decided_by+"."));
+  if(c.note)body.append(el("p",null,c.note));
+  if(c.refs&&c.refs.length){body.append(el("h4",null,"Where the name occurs"));
+   body.append(el("p",null,c.refs.map(r=>r.path+":"+r.line+" ["+r.kind+"]").join("\\n")))}
+  head.onclick=()=>row.classList.toggle("open");row.append(head,body);list.append(row)});
+ if(!shown)list.append(el("div","empty","Nothing matches these filters."))}
+cdraw();
 </script></body></html>
 """

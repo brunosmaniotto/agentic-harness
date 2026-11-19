@@ -133,6 +133,14 @@ def write_report(ctx: Ctx, stopped: str = "") -> None:
         out.append(f"- Second verifier ({seconds[0]['model']}): checked {len(seconds)} finding(s); "
                    f"agreed on {agree}, disagreed on {split} (sent to maintainers), "
                    f"undecided on {len(seconds) - agree - split}")
+    tidy = store.meta_get("cleanup")
+    if tidy:
+        tidy = [c for c in tidy if c["kind"] != "output"]
+        lines_ = lambda t: sum(c["lines"] for c in tidy if c["tier"] == t)
+        out.append(f"- Potential clean up, in `cleanup.md`: {len(tidy)} candidate(s); "
+                   f"{sum(1 for c in tidy if c['tier'] == 'safe')} safe to remove ({lines_('safe'):,} lines), "
+                   f"{sum(1 for c in tidy if c['tier'] == 'probable')} probably unused, "
+                   f"{sum(1 for c in tidy if c['tier'] == 'check')} to check first")
     forks = store.meta_get("forks") or []
     if forks:
         verdicts = [g for fk in forks for g in (store.meta_get(f"fork_result:{fk['id']}") or [])]
@@ -276,4 +284,6 @@ def write_report(ctx: Ctx, stopped: str = "") -> None:
             fh.write(json.dumps({k: c[k] for k in (
                 "id", "source", "stage", "kind", "subject", "entity", "attribute", "value",
                 "statement", "evidence", "evidence_ok", "confidence")}) + "\n")
+    from .cleanup import write_cleanup
+    write_cleanup(ctx)
     write_dashboard(ctx)

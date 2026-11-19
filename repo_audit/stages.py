@@ -74,7 +74,8 @@ def static_ingest(ctx: Ctx) -> None:
     def head(rel: str) -> dict:
         return {"path": rel, "line_start": 1, "line_end": min(files[rel]["lines"], 40), "quote": ""}
 
-    for rel in sorted(skel["unused"], key=lambda r: -files[r]["lines"])[:cap]:
+    # Unused files are reported in cleanup.md when the clean-up analysis is on.
+    for rel in ([] if ctx.cfg["cleanup"]["enabled"] else sorted(skel["unused"], key=lambda r: -files[r]["lines"])[:cap]):
         git = files[rel].get("git") or {}
         history = ""
         if git:

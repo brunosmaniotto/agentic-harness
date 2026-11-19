@@ -56,6 +56,8 @@ Each stage builds a list of units `(id, input_hash, payload)` and hands it to `C
 | rules | a file's claims (packed) against the rule list | the claims and the rules | `rule_violation` findings |
 | verify | candidate finding | finding, file contents, relevant maintainer statements, any extra code it asked for | verdict, corrected evidence, a question if it needs a person; `needs_code` earns one extra pass with the requested code |
 | second opinion | a confirmed or refuted finding at or above `second_opinion_min_severity`, when `verifier_2` is set | same input as verify, plus the first verdict | agreement noted; disagreement sets `needs_human` and asks a question |
+| cleanup | up to 15 candidates static analysis left as probable or check | each candidate and every occurrence of its name | used / unused / unsure per candidate (cheap tier) |
+| cleanup_check | one candidate the first check was unsure about | the occurrences in context, the definition, run-time lookups in the repository, maintainers' answers | used / tests_only / unused / needs_human; one question per file for the last |
 | themes | one | the confirmed findings | groups stored in `meta`, shown first in the report |
 | questions | batch of open questions | their text | merges, drops, priority |
 
@@ -120,6 +122,7 @@ repo_audit/
   human.py      answers and notes
   report.py     report.md, questions.md, findings.json, claims.jsonl
   dashboard.py  dashboard.html: confirmed findings folded into unique issues, ranked
+  cleanup.py    potential clean up: candidates, tiers, escalation, cleanup.md
   pipeline.py   stage order, plan
   cli.py        commands
   prompts/      one text file per stage, plus _common.md prepended to each

@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import blocks, evidence, report, skeleton, stages
+from . import blocks, cleanup, evidence, report, skeleton, stages
 from .core import Ctx, PendingWork
 from .llm import LLM, BudgetExceeded, LLMError
 from .store import Store
 
-MODEL_STAGES = ["docs", "leads", "system", "paths", "files", "reconcile", "blocks", "rules", "verify",
+MODEL_STAGES = ["docs", "leads", "system", "paths", "files", "reconcile", "blocks", "rules", "verify", "cleanup",
                 "themes", "questions"]
 
 
@@ -35,6 +35,8 @@ def run(cfg: dict, only: set[str] | None = None, static_only: bool = False,
         responder=None, log=print) -> Ctx:
     ctx = build_context(cfg, responder, log)
     stages.static_ingest(ctx)
+    if cfg["cleanup"]["enabled"]:
+        cleanup.run_static(ctx)  # cheap, and keeps cleanup.md current even if a later stage pauses
     stopped = ""
 
     def want(name: str) -> bool:
@@ -86,6 +88,8 @@ def run(cfg: dict, only: set[str] | None = None, static_only: bool = False,
         if want("verify"):
             step("verify", stages.run_verify)
             step("second opinion", stages.run_second_opinion)
+        if cfg["cleanup"]["enabled"] and want("cleanup"):
+            step("clean up", cleanup.run_cleanup)
         if want("themes"):
             step("themes", stages.run_themes)
         if want("questions"):

@@ -70,7 +70,7 @@ DEFAULTS: dict = {
         "files": "cheap", "canonicalize": "strong", "reconcile": "strong",
         "contracts": "strong", "supply": "strong", "rules": "strong", "themes": "strong",
         "probe": "strong", "verify": "verifier", "verify2": "verifier_2", "questions": "cheap",
-        "blocks": "strong", "branches": "strong",
+        "blocks": "strong", "branches": "strong", "cleanup": "cheap", "cleanup_check": "verifier",
     },
     "budget": {"max_calls": 5000, "max_tokens": 50_000_000, "max_usd": 0.0},
     "limits": {
@@ -112,6 +112,24 @@ DEFAULTS: dict = {
                "skip_low_redundant": False,
                # e.g. ["leak", "evaluation period"]: matching findings are verified whatever their severity
                "focus_terms": []},
+    # Potential clean up: unused files, functions, classes, constants, outputs, commented-out
+    # code, in cleanup.md and a dashboard tab, apart from the findings.
+    "cleanup": {
+        "enabled": True,
+        "escalate": True,          # send what static analysis cannot settle up the ladder
+        "pack": 15,                # candidates per first-check call (cheap tier)
+        "max_checks": 150,         # verifier calls at most, per run
+        "confirm_safe": False,     # also send statically safe candidates to the first check
+        "confirm_probable": False, # send first-check "unused" to the verifier, to reach "safe"
+        # A command that receives the still-unsettled candidates as JSON on stdin and prints
+        # verdicts as JSON (see cleanup._external), e.g. ["python", "my_checker.py"].
+        "external_check": [],
+        "external_timeout_s": 600,
+        # Is this a library other repositories import? "auto" decides from setup.py/pyproject
+        # (an explicit package list); "yes" makes every public name "probably unused" at most.
+        "public_api": "auto",
+        "ask_about_outputs": False,  # one question per file whose outputs nothing reads
+    },
     "prompts": {"dir": ""},
 }
 

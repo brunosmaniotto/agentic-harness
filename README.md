@@ -29,6 +29,7 @@ Output, in `.repo-audit/`:
 | File | What it is |
 |---|---|
 | `report.md` | Confirmed findings with file and line, what is waiting on a person, and a map of the system |
+| `cleanup.md`, `cleanup.json` | Potential clean up: files, functions, classes, methods, constants and outputs nothing uses, and commented-out code, in three tiers (also a tab in the dashboard) |
 | `dashboard.html` | The confirmed findings folded into unique issues and ranked by urgency, in one self-contained page: severity filter, type filter, search, and rows that open to show the detail, the quoted evidence and every finding folded into them |
 | `questions.md` | The questions worth a person's time: those that decide a finding, then those triage marked important |
 | `questions_all.md` | The remaining open questions |
@@ -68,6 +69,16 @@ A rule is a demand with no file behind it. Rules written in the documentation ar
 ## Supply and demand
 
 Each file is read for two things besides what it does: what it **requires** to be true of its inputs ("totals arrive already winsorized") and what it **ensures** about its outputs ("drops rows with missing dates"). The contracts stage then walks every shared table, file and parameter and matches each demand to a supplier. It reports a demand nobody meets, a supplier that does something different from what is demanded, and the same treatment applied twice. Before reporting an unmet demand it sends a second look into the files that write the data, and if nothing in the repository produces the data at all, it asks the maintainers instead.
+
+## Potential clean up
+
+Separate from the findings, because dead code is not a bug and a large repository has enough of it to bury the bugs. The static pass lists unused files, top-level functions and classes, methods, module constants, outputs nothing reads, and commented-out code. For each name it finds every occurrence in the repository and classifies it: Python code, a test, a string in the code (`getattr`, a registry), `__all__`, a config or script, a notebook, documentation. Comments and docstrings do not count. Each candidate gets a tier:
+
+- **Safe to remove**: nothing refers to it anywhere.
+- **Probably unused**: only tests or documentation refer to it, or it is public in a library other repositories import.
+- **Check first**: it may be reached in a way the repository does not show: a framework decorator, a string lookup, a config file, a notebook, a method a library base class calls.
+
+What static analysis cannot settle goes up a ladder, each step only for what the step before left open: a cheap model reads the occurrences (many candidates per call); the verifier reads the definition, each occurrence in context and every place the repository looks names up at run time; an optional outside checker (`[cleanup] external_check`, any command that takes candidates as JSON and returns verdicts); and finally maintainers, with one question per file, whose answer goes back to the verifier. Code that only tests reach never becomes "safe": removing it means removing its tests. Settings are under `[cleanup]`; `public_api = "yes"` for a library.
 
 ## Branches from the same data
 
