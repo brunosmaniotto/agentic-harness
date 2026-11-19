@@ -398,11 +398,18 @@ def run_cleanup(ctx: Ctx) -> dict:
     if cfg["confirm_safe"]:
         queue += [c for c in found if c["tier"] == "safe" and c["kind"] not in ("commented_code",)]
 
-    # step 2: cheap model, many candidates per call
+    jev = bool(ctx.cfg["decisions"]["model"])
+    # step 2: the first check. A decision model (Jev) if one is set: one cheap typed question
+    # per candidate, settled only when its answer is calibrated-sure; otherwise a cheap
+    # chat model reading many candidates per call.
+    if jev:
+        done = _first_check_jev(ctx, queue)
+        for k in stats:
+            stats[k] += done.get(k, 0)
     system, prompt_hash = ctx.prompt("cleanup")
     model = ctx.llm.model_for("cleanup")
     packs, size = [], cfg["pack"]
-    for i in range(0, len(queue), size):
+    for i in range(0, 0 if jev else len(queue), size):
         pack = queue[i:i + size]
         body = "CANDIDATES\n\n" + "\n\n".join(_card(ctx, c, f"K{j}") for j, c in enumerate(pack, 1))
         packs.append(("p-" + sha(*(c["key"] for c in pack))[:12], sha(prompt_hash, model, body), (pack, body)))
@@ -420,9 +427,10 @@ def run_cleanup(ctx: Ctx) -> dict:
                     "verdict": pick(item.get("verdict"), ("unused", "used", "unsure"), "unsure"),
                     "reason": text_of(item.get("reason"), 400)})
 
-    r1 = ctx.run_units("cleanup", packs, worker1, apply1)
-    for k in stats:
-        stats[k] += r1.get(k, 0)
+    if not jev:
+        r1 = ctx.run_units("cleanup", packs, worker1, apply1)
+        for k in stats:
+            stats[k] += r1.get(k, 0)
 
     # step 3: the verifier, one candidate at a time, with code in context
     unsure = [c for c in queue if (ctx.store.meta_get(f"cleanup1:{c['key']}") or {}).get("verdict") == "unsure"]
@@ -469,6 +477,19 @@ def run_cleanup(ctx: Ctx) -> dict:
     for k in stats:
         stats[k] += r2.get(k, 0)
 
+    # double check: before the verifier's "unused" makes anything safe, and for what static
+    # analysis alone called safe, ask the decision model whether anything can still reach it
+    if jev:
+        bodies = {u[0]: u[2][1] for u in units}
+        to_check = [(c, bodies[c["key"]]) for c in unsure
+                    if (ctx.store.meta_get(f"cleanup2:{c['key']}") or {}).get("verdict") == "unused"
+                    and c["key"] in bodies]
+        to_check += [(c, _card(ctx, c, "K1", context_lines=3)) for c in found
+                     if c["tier"] == "safe" and c["kind"] not in ("commented_code", "output")]
+        done = _double_check_jev(ctx, to_check)
+        for k in stats:
+            stats[k] += done.get(k, 0)
+
     # step 4: an outside checker, if one is configured
     open_ = [c for c in unsure if (ctx.store.meta_get(f"cleanup2:{c['key']}") or {}).get("verdict") == "needs_human"]
     if cfg["external_check"] and open_:
@@ -478,6 +499,77 @@ def run_cleanup(ctx: Ctx) -> dict:
     _ask(ctx, found)
     _settle(ctx, found)
     return stats
+
+
+FIRST_QUESTION = {"status": {
+    "type": "choice",
+    "instructions": "Judging by every place its name occurs in the repository, is this code, file or "
+                    "constant still used?",
+    "criteria": {
+        "used": "Something reaches it: code that calls or imports it, a string the code resolves "
+                "(getattr, a registry, a config value naming it), a framework decorator that registers "
+                "it, a library base class that calls the method, a notebook or script.",
+        "tests_only": "Only test code reaches it.",
+        "unused": "Nothing reaches it. Mentions in documentation, comments, log messages, or unrelated "
+                  "strings and other classes' methods that share the name do not count.",
+    }}}
+DOUBLE_QUESTION = {"reachable": {
+    "type": "noul",
+    "instructions": "Could anything in this repository, or a framework or library it uses, still reach "
+                    "this code, file or constant?",
+    "criteria": {
+        "true": "Some path reaches it: a call, an import, a string resolved at run time, a registry, a "
+                "decorator, a base class, a config file, a notebook, or a test.",
+        "false": "Nothing shown reaches it; removing it would not change what the code or its tests do.",
+    }}}
+
+
+def _state(text: str) -> dict:
+    # Under ~32 KB the decision model runs in its fast, more accurate mode.
+    return {"task": "Decide whether a candidate for removal is still used.", "candidate": text[:30000]}
+
+
+def _first_check_jev(ctx: Ctx, queue: list[dict]) -> dict:
+    accept, model = ctx.cfg["decisions"]["accept"], ctx.cfg["decisions"]["model"]
+    units = []
+    for c in queue:
+        state = _state(_card(ctx, c, "K1"))
+        units.append((c["key"], sha("jev-first", model, json.dumps(state, sort_keys=True)), (c, state)))
+
+    def worker(payload):
+        return ctx.llm.decide("cleanup_jev", payload[1], FIRST_QUESTION)
+
+    def apply(uid, payload, answers):
+        a = answers.get("status") or {}
+        probs = {k: float(v) for k, v in (a.get("probabilities") or {}).items()
+                 if k in ("used", "tests_only", "unused")}
+        top = max(probs, key=probs.get) if probs else None
+        verdict = top if top and probs[top] >= accept else "unsure"
+        ctx.store.meta_set(f"cleanup1:{uid}", {
+            "verdict": verdict,
+            "reason": "Jev: " + ", ".join(f"{k} {p:.2f}" for k, p in sorted(probs.items(), key=lambda x: -x[1]))
+                      + ("" if verdict != "unsure" else f"; below {accept:.2f}, sent to the verifier")})
+
+    return ctx.run_units("cleanup_jev", units, worker, apply)
+
+
+def _double_check_jev(ctx: Ctx, items: list[tuple[dict, str]]) -> dict:
+    model = ctx.cfg["decisions"]["model"]
+    units = []
+    for c, text in items:
+        state = _state(text)
+        units.append((c["key"], sha("jev-double", model, json.dumps(state, sort_keys=True)), (c, state)))
+
+    def worker(payload):
+        return ctx.llm.decide("cleanup_double", payload[1], DOUBLE_QUESTION)
+
+    def apply(uid, payload, answers):
+        a = answers.get("reachable") or {}
+        if a.get("type") == "refusal" or "noul" not in a:
+            return
+        ctx.store.meta_set(f"cleanup2d:{uid}", {"p_reachable": float(a["noul"])})
+
+    return ctx.run_units("cleanup_double", units, worker, apply)
 
 
 def _external(ctx: Ctx, items: list[dict]) -> None:
@@ -509,6 +601,17 @@ def _external(ctx: Ctx, items: list[dict]) -> None:
 
 def _final(ctx: Ctx, c: dict) -> tuple[str | None, str]:
     """(tier or None if used, who decided) after every step that ran."""
+    tier, who = _ladder(ctx, c)
+    double = ctx.store.meta_get(f"cleanup2d:{c['key']}")
+    if tier == "safe" and double and double["p_reachable"] >= ctx.cfg["decisions"]["veto"]:
+        # the double check thinks something still reaches it: never "safe" on one opinion
+        if who == "verifier":
+            return "check", "verifier and Jev disagree"
+        return "probable", f"{who}, with Jev doubting it"
+    return tier, who
+
+
+def _ladder(ctx: Ctx, c: dict) -> tuple[str | None, str]:
     for level, who in (("cleanup3", "outside check"), ("cleanup2", "verifier"), ("cleanup1", "first check")):
         v = ctx.store.meta_get(f"{level}:{c['key']}")
         if not v or v["verdict"] in ("unsure",):
@@ -529,7 +632,7 @@ def _ask(ctx: Ctx, found: list[dict]) -> None:
     by_file: dict[str, list[dict]] = defaultdict(list)
     for c in found:
         tier, who = _final(ctx, c)
-        if tier == "check" and (who == "verifier" or (c["kind"] == "output" and ctx.cfg["cleanup"]["ask_about_outputs"])):
+        if tier == "check" and (who.startswith("verifier") or (c["kind"] == "output" and ctx.cfg["cleanup"]["ask_about_outputs"])):
             by_file[c["path"]].append(c)
     live = set()
     for path, items in sorted(by_file.items()):
@@ -556,9 +659,12 @@ def _settle(ctx: Ctx, found: list[dict]) -> None:
     for c in found:
         tier, who = _final(ctx, c)
         if tier:
-            final.append(dict(c, tier=tier, decided_by=who,
-                              note=next((v["reason"] for level in ("cleanup3", "cleanup2", "cleanup1")
-                                         for v in [ctx.store.meta_get(f"{level}:{c['key']}")] if v), "")))
+            note = next((v["reason"] for level in ("cleanup3", "cleanup2", "cleanup1")
+                         for v in [ctx.store.meta_get(f"{level}:{c['key']}")] if v), "")
+            double = ctx.store.meta_get(f"cleanup2d:{c['key']}")
+            if double:
+                note += f" Jev double check: reachable with probability {double['p_reachable']:.2f}."
+            final.append(dict(c, tier=tier, decided_by=who, note=note.strip()))
     ctx.store.meta_set("cleanup", final)
 
 

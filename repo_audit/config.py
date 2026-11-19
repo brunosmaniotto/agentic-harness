@@ -71,6 +71,7 @@ DEFAULTS: dict = {
         "contracts": "strong", "supply": "strong", "rules": "strong", "themes": "strong",
         "probe": "strong", "verify": "verifier", "verify2": "verifier_2", "questions": "cheap",
         "blocks": "strong", "branches": "strong", "cleanup": "cheap", "cleanup_check": "verifier",
+        "cleanup_jev": "decisions", "cleanup_double": "decisions",
     },
     "budget": {"max_calls": 5000, "max_tokens": 50_000_000, "max_usd": 0.0},
     "limits": {
@@ -129,6 +130,15 @@ DEFAULTS: dict = {
         # (an explicit package list); "yes" makes every public name "probably unused" at most.
         "public_api": "auto",
         "ask_about_outputs": False,  # one question per file whose outputs nothing reads
+    },
+    # A decision model (TypeSafe's Jev) for cheap, calibrated yes/no and choice checks.
+    # Leave model empty to turn it off. Through OpenRouter, the same key as [llm] works.
+    "decisions": {
+        "model": "",               # e.g. "~typesafe/jev-latest"
+        "url": "https://openrouter.ai/api/alpha/decisions",
+        "api_key_env": "",         # empty: the [llm] key
+        "accept": 0.9,             # settle a clean-up candidate when the top answer is this probable
+        "veto": 0.5,               # a double check this sure that the code is reachable blocks "safe"
     },
     "prompts": {"dir": ""},
 }
@@ -200,6 +210,10 @@ cheap = ""       # e.g. "anthropic/claude-haiku-5.5"
 strong = ""      # e.g. "anthropic/claude-sonnet-5.5"
 verifier = ""    # e.g. "openai/gpt-6.1-sol"
 verifier_2 = ""   # optional: a second verifier from another family checks high-severity verdicts
+
+[decisions]
+# Optional decision model for cheap, calibrated checks (TypeSafe's Jev, via OpenRouter).
+# model = "~typesafe/jev-latest"
 
 [budget]
 max_calls = 5000

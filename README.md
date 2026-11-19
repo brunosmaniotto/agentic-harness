@@ -80,6 +80,11 @@ Separate from the findings, because dead code is not a bug and a large repositor
 
 What static analysis cannot settle goes up a ladder, each step only for what the step before left open: a cheap model reads the occurrences (many candidates per call); the verifier reads the definition, each occurrence in context and every place the repository looks names up at run time; an optional outside checker (`[cleanup] external_check`, any command that takes candidates as JSON and returns verdicts); and finally maintainers, with one question per file, whose answer goes back to the verifier. Code that only tests reach never becomes "safe": removing it means removing its tests. Settings are under `[cleanup]`; `public_api = "yes"` for a library.
 
+**With a decision model (Jev).** Set `[decisions] model = "~typesafe/jev-latest"` to use TypeSafe's Jev, served through OpenRouter with the same key. Jev answers typed questions (yes/no, pick one) with calibrated probabilities instead of writing text, at a fraction of a cent per call, and it is a different family from the chat models. It changes the ladder in two places:
+
+- **First check.** One question per candidate (used / only tests / unused) replaces the packed cheap-model call. A candidate is settled only when the top answer reaches `accept` (default 0.9); anything less goes to the verifier.
+- **Double check.** Before anything becomes "safe", whether static analysis or the verifier said so, Jev is asked whether anything can still reach it. At `veto` (default 0.5) or above, a verifier "unused" becomes "check first" with a question to maintainers, and a static "safe" drops to "probably unused".
+
 ## Branches from the same data
 
 Some problems are invisible file by file. Training and scoring, a backtest and the production job, or every model in a horse race each start from the same data and are supposed to treat it the same way. When one branch winsorizes before imputing and the other after, or one restricts the sample to 1992Q1 and the other does not, each file looks fine on its own.

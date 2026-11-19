@@ -75,7 +75,7 @@ class LLM:
         if llm["provider"] == "openai_compatible":
             if not os.environ.get(llm["api_key_env"], ""):
                 raise LLMError(f"environment variable {llm['api_key_env']} is not set")
-            for tier in sorted(set(self.cfg["stages"].values()) - {"verifier_2"}):  # optional
+            for tier in sorted(set(self.cfg["stages"].values()) - {"verifier_2", "decisions"}):  # optional
                 if not self.cfg["models"].get(tier):
                     raise LLMError(f"[models].{tier} is empty in the config")
         elif llm["provider"] == "command" and not llm["command"]:
@@ -181,6 +181,71 @@ class LLM:
             self.usd += cost
         self.store.log_call(stage, model, pt, ct, cost, False, time.time() - started, True)
         return text
+
+    # -- decision models (Jev) ---------------------------------------------
+    def decide(self, stage: str, state, questions: dict) -> dict:
+        """Ask a decision model typed questions about `state`; return its answers.
+
+        Decision models (TypeSafe's Jev is the first) answer yes/no ("noul"), choice and
+        score questions with calibrated probabilities instead of writing text: cheap and
+        fast enough to screen every candidate, and from a different family than the
+        chat models, which makes them a useful independent check. Uses the Decisions API
+        (OpenRouter: POST /api/alpha/decisions). Answers are cached like completions."""
+        dcfg = self.cfg["decisions"]
+        body = {"model": dcfg["model"], "state": state, "questions": questions}
+        payload = json.dumps(body, sort_keys=True)
+        key = "decide:" + hashlib.sha256(payload.encode("utf-8", "replace")).hexdigest()
+        hit = self.store.cache_get(key)
+        if hit is not None:
+            self.store.log_call(stage, dcfg["model"], 0, 0, 0.0, True, 0.0, True)
+            return json.loads(hit)
+        self._check_budget()
+        started = time.time()
+        try:
+            if self.cfg["llm"]["provider"] == "mock":
+                data = json.loads(self.responder(stage, "DECISIONS", payload))
+            else:
+                data = self._post_decisions(payload.encode("utf-8"))
+        except Exception:
+            self.store.log_call(stage, dcfg["model"], 0, 0, 0.0, False, time.time() - started, False)
+            raise
+        answers = data.get("answers") if isinstance(data, dict) else None
+        if not isinstance(answers, dict):
+            raise LLMError(f"decision model returned no answers: {json.dumps(data)[:300]}")
+        usage = data.get("usage") or {}
+        pt, ct = int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
+        cost = float(usage.get("cost") or 0.0)
+        with self.lock:
+            self.calls += 1
+            self.tokens += pt + ct
+            self.usd += cost
+        self.store.log_call(stage, dcfg["model"], pt, ct, cost, False, time.time() - started, True)
+        self.store.cache_set(key, json.dumps(answers))
+        return answers
+
+    def _post_decisions(self, payload: bytes) -> dict:
+        dcfg, llm = self.cfg["decisions"], self.cfg["llm"]
+        env = dcfg["api_key_env"] or llm["api_key_env"]
+        key = os.environ.get(env, "")
+        if not key:
+            raise LLMError(f"environment variable {env} is not set")
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        last = "no attempt made"
+        for attempt in range(llm["max_retries"] + 1):
+            wait = min(60.0, 2.0 ** attempt + random.random())
+            try:
+                req = urllib.request.Request(dcfg["url"], data=payload, headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=llm["timeout_s"]) as resp:
+                    return json.loads(resp.read().decode("utf-8", "replace"))
+            except urllib.error.HTTPError as exc:
+                last = f"HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:300]}"
+                if exc.code not in (408, 409, 425, 429, 529) and exc.code < 500:
+                    raise LLMError(last) from exc
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+                last = f"{type(exc).__name__}: {exc}"
+            if attempt < llm["max_retries"]:
+                time.sleep(wait)
+        raise LLMError(f"decision request failed after retries: {last}")
 
     def _command(self, system: str, user: str) -> str:
         argv = self.cfg["llm"]["command"]

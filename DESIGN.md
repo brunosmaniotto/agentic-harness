@@ -57,6 +57,8 @@ Each stage builds a list of units `(id, input_hash, payload)` and hands it to `C
 | verify | candidate finding | finding, file contents, relevant maintainer statements, any extra code it asked for | verdict, corrected evidence, a question if it needs a person; `needs_code` earns one extra pass with the requested code |
 | second opinion | a confirmed or refuted finding at or above `second_opinion_min_severity`, when `verifier_2` is set | same input as verify, plus the first verdict | agreement noted; disagreement sets `needs_human` and asks a question |
 | cleanup | up to 15 candidates static analysis left as probable or check | each candidate and every occurrence of its name | used / unused / unsure per candidate (cheap tier) |
+| cleanup_jev | one candidate, when `[decisions] model` is set (replaces `cleanup`) | the candidate's card | a choice (used / tests_only / unused) with probabilities; settled at `accept` or above |
+| cleanup_double | a candidate about to become "safe" (static or verifier), when `[decisions] model` is set | the candidate, with the verifier's input if it had one | probability that something reaches it; at `veto` or above it cannot be "safe" |
 | cleanup_check | one candidate the first check was unsure about | the occurrences in context, the definition, run-time lookups in the repository, maintainers' answers | used / tests_only / unused / needs_human; one question per file for the last |
 | themes | one | the confirmed findings | groups stored in `meta`, shown first in the report |
 | questions | batch of open questions | their text | merges, drops, priority |
